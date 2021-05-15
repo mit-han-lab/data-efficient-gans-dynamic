@@ -8,6 +8,8 @@
 
 This repository contains our implementation of Differentiable Augmentation (DiffAugment) in both PyTorch and TensorFlow. It can be used to significantly improve the data efficiency for GAN training. We have provided [DiffAugment-stylegan2](https://github.com/mit-han-lab/data-efficient-gans/tree/master/DiffAugment-stylegan2) (TensorFlow) and [DiffAugment-stylegan2-pytorch](https://github.com/mit-han-lab/data-efficient-gans/tree/master/DiffAugment-stylegan2-pytorch), [DiffAugment-biggan-cifar](https://github.com/mit-han-lab/data-efficient-gans/tree/master/DiffAugment-biggan-cifar) (PyTorch) for GPU training, and [DiffAugment-biggan-imagenet](https://github.com/mit-han-lab/data-efficient-gans/tree/master/DiffAugment-biggan-imagenet) (TensorFlow) for TPU training.
 
+3rd party code is dynamically linked in this repo. Users are free to obtain the 3rd party code on their own, as illustrated in the Usage section. 
+
 Differentiable Augmentation for Data-Efficient GAN Training<br>
 [Shengyu Zhao](https://scholar.google.com/citations?user=gLCdw70AAAAJ), [Zhijian Liu](http://zhijianliu.com/), [Ji Lin](http://linji.me/), [Jun-Yan Zhu](https://www.cs.cmu.edu/~junyanz/), and [Song Han](https://songhan.mit.edu/)<br>
 MIT, Tsinghua University, Adobe Research, CMU<br>
