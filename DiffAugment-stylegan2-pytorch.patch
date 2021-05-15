@@ -1,0 +1,873 @@
+diff --git a/.github/ISSUE_TEMPLATE/bug_report.md b/.github/ISSUE_TEMPLATE/bug_report.md
+deleted file mode 100644
+index d79b107..0000000
+--- a/.github/ISSUE_TEMPLATE/bug_report.md
++++ /dev/null
+@@ -1,35 +0,0 @@
+----
+-name: Bug report
+-about: Create a report to help us improve
+-title: ''
+-labels: ''
+-assignees: ''
+-
+----
+-
+-**Describe the bug**
+-A clear and concise description of what the bug is.
+-
+-**To Reproduce**
+-Steps to reproduce the behavior:
+-1. In '...' directory, run command '...'
+-2. See error (copy&paste full log, including exceptions and **stacktraces**).
+-
+-Please copy&paste text instead of screenshots for better searchability.
+-
+-**Expected behavior**
+-A clear and concise description of what you expected to happen.
+-
+-**Screenshots**
+-If applicable, add screenshots to help explain your problem.
+-
+-**Desktop (please complete the following information):**
+- - OS: [e.g. Linux Ubuntu 20.04, Windows 10]
+- - PyTorch version (e.g., pytorch 1.7.1)
+- - CUDA toolkit version (e.g., CUDA 11.0)
+- - NVIDIA driver version
+- - GPU [e.g., Titan V, RTX 3090]
+- - Docker: did you use Docker?  If yes, specify docker image URL (e.g., nvcr.io/nvidia/pytorch:20.12-py3)
+-
+-**Additional context**
+-Add any other context about the problem here.
+diff --git a/DiffAugment_pytorch.py b/DiffAugment_pytorch.py
+new file mode 100644
+index 0000000..6edb7a4
+--- /dev/null
++++ b/DiffAugment_pytorch.py
+@@ -0,0 +1,76 @@
++# Differentiable Augmentation for Data-Efficient GAN Training
++# Shengyu Zhao, Zhijian Liu, Ji Lin, Jun-Yan Zhu, and Song Han
++# https://arxiv.org/pdf/2006.10738
++
++import torch
++import torch.nn.functional as F
++
++
++def DiffAugment(x, policy='', channels_first=True):
++    if policy:
++        if not channels_first:
++            x = x.permute(0, 3, 1, 2)
++        for p in policy.split(','):
++            for f in AUGMENT_FNS[p]:
++                x = f(x)
++        if not channels_first:
++            x = x.permute(0, 2, 3, 1)
++        x = x.contiguous()
++    return x
++
++
++def rand_brightness(x):
++    x = x + (torch.rand(x.size(0), 1, 1, 1, dtype=x.dtype, device=x.device) - 0.5)
++    return x
++
++
++def rand_saturation(x):
++    x_mean = x.mean(dim=1, keepdim=True)
++    x = (x - x_mean) * (torch.rand(x.size(0), 1, 1, 1, dtype=x.dtype, device=x.device) * 2) + x_mean
++    return x
++
++
++def rand_contrast(x):
++    x_mean = x.mean(dim=[1, 2, 3], keepdim=True)
++    x = (x - x_mean) * (torch.rand(x.size(0), 1, 1, 1, dtype=x.dtype, device=x.device) + 0.5) + x_mean
++    return x
++
++
++def rand_translation(x, ratio=0.125):
++    shift_x, shift_y = int(x.size(2) * ratio + 0.5), int(x.size(3) * ratio + 0.5)
++    translation_x = torch.randint(-shift_x, shift_x + 1, size=[x.size(0), 1, 1], device=x.device)
++    translation_y = torch.randint(-shift_y, shift_y + 1, size=[x.size(0), 1, 1], device=x.device)
++    grid_batch, grid_x, grid_y = torch.meshgrid(
++        torch.arange(x.size(0), dtype=torch.long, device=x.device),
++        torch.arange(x.size(2), dtype=torch.long, device=x.device),
++        torch.arange(x.size(3), dtype=torch.long, device=x.device),
++    )
++    grid_x = torch.clamp(grid_x + translation_x + 1, 0, x.size(2) + 1)
++    grid_y = torch.clamp(grid_y + translation_y + 1, 0, x.size(3) + 1)
++    x_pad = F.pad(x, [1, 1, 1, 1, 0, 0, 0, 0])
++    x = x_pad.permute(0, 2, 3, 1).contiguous()[grid_batch, grid_x, grid_y].permute(0, 3, 1, 2).contiguous()
++    return x
++
++
++def rand_cutout(x, ratio=0.5):
++    cutout_size = int(x.size(2) * ratio + 0.5), int(x.size(3) * ratio + 0.5)
++    offset_x = torch.randint(0, x.size(2) + (1 - cutout_size[0] % 2), size=[x.size(0), 1, 1], device=x.device)
++    offset_y = torch.randint(0, x.size(3) + (1 - cutout_size[1] % 2), size=[x.size(0), 1, 1], device=x.device)
++    grid_batch, grid_x, grid_y = torch.meshgrid(
++        torch.arange(x.size(0), dtype=torch.long, device=x.device),
++        torch.arange(cutout_size[0], dtype=torch.long, device=x.device),
++        torch.arange(cutout_size[1], dtype=torch.long, device=x.device),
++    )
++    grid_x = torch.clamp(grid_x + offset_x - cutout_size[0] // 2, min=0, max=x.size(2) - 1)
++    grid_y = torch.clamp(grid_y + offset_y - cutout_size[1] // 2, min=0, max=x.size(3) - 1)
++    mask = torch.ones(x.size(0), x.size(2), x.size(3), dtype=x.dtype, device=x.device)
++    mask[grid_batch, grid_x, grid_y] = 0
++    x = x * mask.unsqueeze(1)
++    return x
++
++
++AUGMENT_FNS = {
++    'color': [rand_brightness, rand_saturation, rand_contrast],
++    'translation': [rand_translation],
++    'cutout': [rand_cutout],
++}
+\ No newline at end of file
+diff --git a/LICENSE.txt b/LICENSE.txt
+index 48e03de..0d2829f 100755
+--- a/LICENSE.txt
++++ b/LICENSE.txt
+@@ -1,3 +1,29 @@
++Copyright (c) 2020, Shengyu Zhao, Zhijian Liu, Ji Lin, Jun-Yan Zhu, and Song Han
++All rights reserved.
++
++Redistribution and use in source and binary forms, with or without
++modification, are permitted provided that the following conditions are met:
++
++* Redistributions of source code must retain the above copyright notice, this
++  list of conditions and the following disclaimer.
++
++* Redistributions in binary form must reproduce the above copyright notice,
++  this list of conditions and the following disclaimer in the documentation
++  and/or other materials provided with the distribution.
++
++THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
++FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
++CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++
++------------------------- LICENSE FOR stylegan2-ada-pytorch --------------------------
+ Copyright (c) 2021, NVIDIA Corporation. All rights reserved.
+ 
+ 
+diff --git a/README.md b/README.md
+index 092b52b..43c6d69 100755
+--- a/README.md
++++ b/README.md
+@@ -1,378 +1,29 @@
+-## StyleGAN2-ADA &mdash; Official PyTorch implementation
++# DiffAugment for StyleGAN2 (PyTorch)
+ 
+-![Teaser image](./docs/stylegan2-ada-teaser-1024x252.png)
++This repo is implemented upon [stylegan2-ada-pytorch](https://github.com/NVlabs/stylegan2-ada-pytorch) with minimal modifications to train and load DiffAugment-stylegan2 models in PyTorch. Please check the [stylegan2-ada-pytorch](https://github.com/NVlabs/stylegan2-ada-pytorch) README for the dependencies and the other usages of this codebase.
+ 
+-**Training Generative Adversarial Networks with Limited Data**<br>
+-Tero Karras, Miika Aittala, Janne Hellsten, Samuli Laine, Jaakko Lehtinen, Timo Aila<br>
+-https://arxiv.org/abs/2006.06676<br>
++## Low-Shot Generation
+ 
+-Abstract: *Training generative adversarial networks (GAN) using too little data typically leads to discriminator overfitting, causing training to diverge. We propose an adaptive discriminator augmentation mechanism that significantly stabilizes training in limited data regimes. The approach does not require changes to loss functions or network architectures, and is applicable both when training from scratch and when fine-tuning an existing GAN on another dataset. We demonstrate, on several datasets, that good results are now possible using only a few thousand training images, often matching StyleGAN2 results with an order of magnitude fewer images. We expect this to open up new application domains for GANs. We also find that the widely used CIFAR-10 is, in fact, a limited data benchmark, and improve the record FID from 5.59 to 2.42.*
+-
+-For business inquiries, please contact [researchinquiries@nvidia.com](mailto:researchinquiries@nvidia.com)<br>
+-For press and other inquiries, please contact Hector Marinez at [hmarinez@nvidia.com](mailto:hmarinez@nvidia.com)<br>
+-
+-## Release notes
+-
+-This repository is a faithful reimplementation of [StyleGAN2-ADA](https://github.com/NVlabs/stylegan2-ada/) in PyTorch, focusing on correctness, performance, and compatibility.
+-
+-**Correctness**
+-* Full support for all primary training configurations.
+-* Extensive verification of image quality, training curves, and quality metrics against the TensorFlow version.
+-* Results are expected to match in all cases, excluding the effects of pseudo-random numbers and floating-point arithmetic.
+-
+-**Performance**
+-* Training is typically 5%&ndash;30% faster compared to the TensorFlow version on NVIDIA Tesla V100 GPUs.
+-* Inference is up to 35% faster in high resolutions, but it may be slightly slower in low resolutions.
+-* GPU memory usage is comparable to the TensorFlow version.
+-* Faster startup time when training new networks (<50s), and also when using pre-trained networks (<4s).
+-* New command line options for tweaking the training performance.
+-
+-**Compatibility**
+-* Compatible with old network pickles created using the TensorFlow version.
+-* New ZIP/PNG based dataset format for maximal interoperability with existing 3rd party tools.
+-* TFRecords datasets are no longer supported &mdash; they need to be converted to the new format.
+-* New JSON-based format for logs, metrics, and training curves.
+-* Training curves are also exported in the old TFEvents format if TensorBoard is installed.
+-* Command line syntax is mostly unchanged, with a few exceptions (e.g., `dataset_tool.py`).
+-* Comparison methods are not supported (`--cmethod`, `--dcap`, `--cfg=cifarbaseline`, `--aug=adarv`)
+-* **Truncation is now disabled by default.**
+-
+-## Data repository
+-
+-| Path | Description
+-| :--- | :----------
+-| [stylegan2-ada-pytorch](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/) | Main directory hosted on Amazon S3
+-| &ensp;&ensp;&boxvr;&nbsp; [ada-paper.pdf](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/ada-paper.pdf) | Paper PDF
+-| &ensp;&ensp;&boxvr;&nbsp; [images](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/images/) | Curated example images produced using the pre-trained models
+-| &ensp;&ensp;&boxvr;&nbsp; [videos](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/videos/) | Curated example interpolation videos
+-| &ensp;&ensp;&boxur;&nbsp; [pretrained](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/) | Pre-trained models
+-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; ffhq.pkl | FFHQ at 1024x1024, trained using original StyleGAN2
+-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; metfaces.pkl | MetFaces at 1024x1024, transfer learning from FFHQ using ADA
+-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; afhqcat.pkl | AFHQ Cat at 512x512, trained from scratch using ADA
+-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; afhqdog.pkl | AFHQ Dog at 512x512, trained from scratch using ADA
+-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; afhqwild.pkl | AFHQ Wild at 512x512, trained from scratch using ADA
+-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; cifar10.pkl | Class-conditional CIFAR-10 at 32x32
+-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; brecahad.pkl | BreCaHAD at 512x512, trained from scratch using ADA
+-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; [paper-fig7c-training-set-sweeps](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/paper-fig7c-training-set-sweeps/) | Models used in Fig.7c (sweep over training set size)
+-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; [paper-fig11a-small-datasets](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/paper-fig11a-small-datasets/) | Models used in Fig.11a (small datasets & transfer learning)
+-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; [paper-fig11b-cifar10](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/paper-fig11b-cifar10/) | Models used in Fig.11b (CIFAR-10)
+-| &ensp;&ensp;&ensp;&ensp;&boxvr;&nbsp; [transfer-learning-source-nets](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/transfer-learning-source-nets/) | Models used as starting point for transfer learning
+-| &ensp;&ensp;&ensp;&ensp;&boxur;&nbsp; [metrics](https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metrics/) | Feature detectors used by the quality metrics
+-
+-## Requirements
+-
+-* Linux and Windows are supported, but we recommend Linux for performance and compatibility reasons.
+-* 1&ndash;8 high-end NVIDIA GPUs with at least 12 GB of memory. We have done all testing and development using NVIDIA DGX-1 with 8 Tesla V100 GPUs.
+-* 64-bit Python 3.7 and PyTorch 1.7.1. See [https://pytorch.org/](https://pytorch.org/) for PyTorch install instructions.
+-* CUDA toolkit 11.0 or later.  Use at least version 11.1 if running on RTX 3090.  (Why is a separate CUDA toolkit installation required?  See comments in [#2](https://github.com/NVlabs/stylegan2-ada-pytorch/issues/2#issuecomment-779457121).)
+-* Python libraries: `pip install click requests tqdm pyspng ninja imageio-ffmpeg==0.4.3`.  We use the Anaconda3 2020.11 distribution which installs most of these by default.
+-* Docker users: use the [provided Dockerfile](./Dockerfile) to build an image with the required library dependencies.
+-
+-The code relies heavily on custom PyTorch extensions that are compiled on the fly using NVCC. On Windows, the compilation requires Microsoft Visual Studio. We recommend installing [Visual Studio Community Edition](https://visualstudio.microsoft.com/vs/) and adding it into `PATH` using `"C:\Program Files (x86)\Microsoft Visual Studio\<VERSION>\Community\VC\Auxiliary\Build\vcvars64.bat"`.
+-
+-## Getting started
+-
+-Pre-trained networks are stored as `*.pkl` files that can be referenced using local filenames or URLs:
+-
+-```.bash
+-# Generate curated MetFaces images without truncation (Fig.10 left)
+-python generate.py --outdir=out --trunc=1 --seeds=85,265,297,849 \
+-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
+-
+-# Generate uncurated MetFaces images with truncation (Fig.12 upper left)
+-python generate.py --outdir=out --trunc=0.7 --seeds=600-605 \
+-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
+-
+-# Generate class conditional CIFAR-10 images (Fig.17 left, Car)
+-python generate.py --outdir=out --seeds=0-35 --class=1 \
+-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/cifar10.pkl
+-
+-# Style mixing example
+-python style_mixing.py --outdir=out --rows=85,100,75,458,1500 --cols=55,821,1789,293 \
+-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
+-```
+-
+-Outputs from the above commands are placed under `out/*.png`, controlled by `--outdir`. Downloaded network pickles are cached under `$HOME/.cache/dnnlib`, which can be overridden by setting the `DNNLIB_CACHE_DIR` environment variable. The default PyTorch extension build directory is `$HOME/.cache/torch_extensions`, which can be overridden by setting `TORCH_EXTENSIONS_DIR`.
+-
+-**Docker**: You can run the above curated image example using Docker as follows:
+-
+-```.bash
+-docker build --tag sg2ada:latest .
+-./docker_run.sh python3 generate.py --outdir=out --trunc=1 --seeds=85,265,297,849 \
+-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
++The following command is an example of training StyleGAN2 with the default *Color + Translation + Cutout* DiffAugment on 100-shot Obama with 1 GPU. See [here](https://hanlab.mit.edu/projects/data-efficient-gans/datasets/) for a list of our provided low-shot datasets. You may also prepare your own dataset and specify the path to your image folder.
++```bash
++python train.py --outdir=training-runs --data=https://hanlab.mit.edu/projects/data-efficient-gans/datasets/100-shot-obama.zip --gpus=1
+ ```
+ 
+-Note: The Docker image requires NVIDIA driver release `r455.23` or later.
+-
+-**Legacy networks**: The above commands can load most of the network pickles created using the previous TensorFlow versions of StyleGAN2 and StyleGAN2-ADA. However, for future compatibility, we recommend converting such legacy pickles into the new format used by the PyTorch version:
+-
+-```.bash
+-python legacy.py \
+-    --source=https://nvlabs-fi-cdn.nvidia.com/stylegan2/networks/stylegan2-cat-config-f.pkl \
+-    --dest=stylegan2-cat-config-f.pkl
+-```
+-
+-## Projecting images to latent space
+-
+-To find the matching latent vector for a given image file, run:
+-
+-```.bash
+-python projector.py --outdir=out --target=~/mytargetimg.png \
+-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/ffhq.pkl
+-```
++## Pre-Trained Models
+ 
+-For optimal results, the target image should be cropped and aligned similar to the [FFHQ dataset](https://github.com/NVlabs/ffhq-dataset). The above command saves the projection target `out/target.png`, result `out/proj.png`, latent vector `out/projected_w.npz`, and progression video `out/proj.mp4`. You can render the resulting latent vector by specifying `--projected_w` for `generate.py`:
++The following commands are an example of generating images with our pre-trained 100-shot Obama model. See [here](https://hanlab.mit.edu/projects/data-efficient-gans/models/) for a list of our provided pre-trained models. The code will automatically convert a TensorFlow StyleGAN2 model to the compatible PyTorch version; you may also use `legacy.py` to do this manually.
++```bash
++python generate.py --outdir=out --seeds=1-16 --network=https://hanlab.mit.edu/projects/data-efficient-gans/models/DiffAugment-stylegan2-100-shot-obama.pkl
+ 
+-```.bash
+-python generate.py --outdir=out --projected_w=out/projected_w.npz \
+-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/ffhq.pkl
++python generate_gif.py --output=obama.gif --seed=0 --num-rows=1 --num-cols=8 --network=https://hanlab.mit.edu/projects/data-efficient-gans/models/DiffAugment-stylegan2-100-shot-obama.pkl
+ ```
+ 
+-## Using networks from Python
+-
+-You can use pre-trained networks in your own Python code as follows:
+-
+-```.python
+-with open('ffhq.pkl', 'rb') as f:
+-    G = pickle.load(f)['G_ema'].cuda()  # torch.nn.Module
+-z = torch.randn([1, G.z_dim]).cuda()    # latent codes
+-c = None                                # class labels (not used in this example)
+-img = G(z, c)                           # NCHW, float32, dynamic range [-1, +1]
+-```
+-
+-The above code requires `torch_utils` and `dnnlib` to be accessible via `PYTHONPATH`. It does not need source code for the networks themselves &mdash; their class definitions are loaded from the pickle via `torch_utils.persistence`.
+-
+-The pickle contains three networks. `'G'` and `'D'` are instantaneous snapshots taken during training, and `'G_ema'` represents a moving average of the generator weights over several training steps. The networks are regular instances of `torch.nn.Module`, with all of their parameters and buffers placed on the CPU at import and gradient computation disabled by default.
+-
+-The generator consists of two submodules, `G.mapping` and `G.synthesis`, that can be executed separately. They also support various additional options:
+-
+-```.python
+-w = G.mapping(z, c, truncation_psi=0.5, truncation_cutoff=8)
+-img = G.synthesis(w, noise_mode='const', force_fp32=True)
+-```
+-
+-Please refer to [`generate.py`](./generate.py), [`style_mixing.py`](./style_mixing.py), and [`projector.py`](./projector.py) for further examples.
+-
+-## Preparing datasets
+-
+-Datasets are stored as uncompressed ZIP archives containing uncompressed PNG files and a metadata file `dataset.json` for labels.
+-
+-Custom datasets can be created from a folder containing images; see [`python dataset_tool.py --help`](./docs/dataset-tool-help.txt) for more information. Alternatively, the folder can also be used directly as a dataset, without running it through `dataset_tool.py` first, but doing so may lead to suboptimal performance.
+-
+-Legacy TFRecords datasets are not supported &mdash; see below for instructions on how to convert them.
+-
+-**FFHQ**:
+-
+-Step 1: Download the [Flickr-Faces-HQ dataset](https://github.com/NVlabs/ffhq-dataset) as TFRecords.
+-
+-Step 2: Extract images from TFRecords using `dataset_tool.py` from the [TensorFlow version of StyleGAN2-ADA](https://github.com/NVlabs/stylegan2-ada/):
+-
+-```.bash
+-# Using dataset_tool.py from TensorFlow version at
+-# https://github.com/NVlabs/stylegan2-ada/
+-python ../stylegan2-ada/dataset_tool.py unpack \
+-    --tfrecord_dir=~/ffhq-dataset/tfrecords/ffhq --output_dir=/tmp/ffhq-unpacked
+-```
+-
+-Step 3: Create ZIP archive using `dataset_tool.py` from this repository:
+-
+-```.bash
+-# Original 1024x1024 resolution.
+-python dataset_tool.py --source=/tmp/ffhq-unpacked --dest=~/datasets/ffhq.zip
+-
+-# Scaled down 256x256 resolution.
+-python dataset_tool.py --source=/tmp/ffhq-unpacked --dest=~/datasets/ffhq256x256.zip \
+-    --width=256 --height=256
+-```
+-
+-**MetFaces**: Download the [MetFaces dataset](https://github.com/NVlabs/metfaces-dataset) and create ZIP archive:
+-
+-```.bash
+-python dataset_tool.py --source=~/downloads/metfaces/images --dest=~/datasets/metfaces.zip
+-```
+-
+-**AFHQ**: Download the [AFHQ dataset](https://github.com/clovaai/stargan-v2/blob/master/README.md#animal-faces-hq-dataset-afhq) and create ZIP archive:
+-
+-```.bash
+-python dataset_tool.py --source=~/downloads/afhq/train/cat --dest=~/datasets/afhqcat.zip
+-python dataset_tool.py --source=~/downloads/afhq/train/dog --dest=~/datasets/afhqdog.zip
+-python dataset_tool.py --source=~/downloads/afhq/train/wild --dest=~/datasets/afhqwild.zip
+-```
+-
+-**CIFAR-10**: Download the [CIFAR-10 python version](https://www.cs.toronto.edu/~kriz/cifar.html) and convert to ZIP archive:
+-
+-```.bash
+-python dataset_tool.py --source=~/downloads/cifar-10-python.tar.gz --dest=~/datasets/cifar10.zip
+-```
+-
+-**LSUN**: Download the desired categories from the [LSUN project page](https://www.yf.io/p/lsun/) and convert to ZIP archive:
+-
+-```.bash
+-python dataset_tool.py --source=~/downloads/lsun/raw/cat_lmdb --dest=~/datasets/lsuncat200k.zip \
+-    --transform=center-crop --width=256 --height=256 --max_images=200000
+-
+-python dataset_tool.py --source=~/downloads/lsun/raw/car_lmdb --dest=~/datasets/lsuncar200k.zip \
+-    --transform=center-crop-wide --width=512 --height=384 --max_images=200000
+-```
+-
+-**BreCaHAD**:
+-
+-Step 1: Download the [BreCaHAD dataset](https://figshare.com/articles/BreCaHAD_A_Dataset_for_Breast_Cancer_Histopathological_Annotation_and_Diagnosis/7379186).
+-
+-Step 2: Extract 512x512 resolution crops using `dataset_tool.py` from the [TensorFlow version of StyleGAN2-ADA](https://github.com/NVlabs/stylegan2-ada/):
+-
+-```.bash
+-# Using dataset_tool.py from TensorFlow version at
+-# https://github.com/NVlabs/stylegan2-ada/
+-python dataset_tool.py extract_brecahad_crops --cropsize=512 \
+-    --output_dir=/tmp/brecahad-crops --brecahad_dir=~/downloads/brecahad/images
+-```
+-
+-Step 3: Create ZIP archive using `dataset_tool.py` from this repository:
+-
+-```.bash
+-python dataset_tool.py --source=/tmp/brecahad-crops --dest=~/datasets/brecahad.zip
+-```
+-
+-## Training new networks
+-
+-In its most basic form, training new networks boils down to:
+-
+-```.bash
+-python train.py --outdir=~/training-runs --data=~/mydataset.zip --gpus=1 --dry-run
+-python train.py --outdir=~/training-runs --data=~/mydataset.zip --gpus=1
+-```
+-
+-The first command is optional; it validates the arguments, prints out the training configuration, and exits. The second command kicks off the actual training.
+-
+-In this example, the results are saved to a newly created directory `~/training-runs/<ID>-mydataset-auto1`, controlled by `--outdir`. The training exports network pickles (`network-snapshot-<INT>.pkl`) and example images (`fakes<INT>.png`) at regular intervals (controlled by `--snap`). For each pickle, it also evaluates FID (controlled by `--metrics`) and logs the resulting scores in `metric-fid50k_full.jsonl` (as well as TFEvents if TensorBoard is installed).
+-
+-The name of the output directory reflects the training configuration. For example, `00000-mydataset-auto1` indicates that the *base configuration* was `auto1`, meaning that the hyperparameters were selected automatically for training on one GPU. The base configuration is controlled by `--cfg`:
+-
+-| Base config           | Description
+-| :-------------------- | :----------
+-| `auto`&nbsp;(default) | Automatically select reasonable defaults based on resolution and GPU count. Serves as a good starting point for new datasets but does not necessarily lead to optimal results.
+-| `stylegan2`           | Reproduce results for StyleGAN2 config F at 1024x1024 using 1, 2, 4, or 8 GPUs.
+-| `paper256`            | Reproduce results for FFHQ and LSUN Cat at 256x256 using 1, 2, 4, or 8 GPUs.
+-| `paper512`            | Reproduce results for BreCaHAD and AFHQ at 512x512 using 1, 2, 4, or 8 GPUs.
+-| `paper1024`           | Reproduce results for MetFaces at 1024x1024 using 1, 2, 4, or 8 GPUs.
+-| `cifar`               | Reproduce results for CIFAR-10 (tuned configuration) using 1 or 2 GPUs.
+-
+-The training configuration can be further customized with additional command line options:
+-
+-* `--aug=noaug` disables ADA.
+-* `--cond=1` enables class-conditional training (requires a dataset with labels).
+-* `--mirror=1` amplifies the dataset with x-flips. Often beneficial, even with ADA.
+-* `--resume=ffhq1024 --snap=10` performs transfer learning from FFHQ trained at 1024x1024.
+-* `--resume=~/training-runs/<NAME>/network-snapshot-<INT>.pkl` resumes a previous training run.
+-* `--gamma=10` overrides R1 gamma. We recommend trying a couple of different values for each new dataset.
+-* `--aug=ada --target=0.7` adjusts ADA target value (default: 0.6).
+-* `--augpipe=blit` enables pixel blitting but disables all other augmentations.
+-* `--augpipe=bgcfnc` enables all available augmentations (blit, geom, color, filter, noise, cutout).
+-
+-Please refer to [`python train.py --help`](./docs/train-help.txt) for the full list.
+-
+-## Expected training time
+-
+-The total training time depends heavily on resolution, number of GPUs, dataset, desired quality, and hyperparameters. The following table lists expected wallclock times to reach different points in the training, measured in thousands of real images shown to the discriminator ("kimg"):
+-
+-| Resolution | GPUs | 1000 kimg | 25000 kimg | sec/kimg          | GPU mem | CPU mem
+-| :--------: | :--: | :-------: | :--------: | :---------------: | :-----: | :-----:
+-| 128x128    | 1    | 4h 05m    | 4d 06h     | 12.8&ndash;13.7   | 7.2 GB  | 3.9 GB
+-| 128x128    | 2    | 2h 06m    | 2d 04h     | 6.5&ndash;6.8     | 7.4 GB  | 7.9 GB
+-| 128x128    | 4    | 1h 20m    | 1d 09h     | 4.1&ndash;4.6     | 4.2 GB  | 16.3 GB
+-| 128x128    | 8    | 1h 13m    | 1d 06h     | 3.9&ndash;4.9     | 2.6 GB  | 31.9 GB
+-| 256x256    | 1    | 6h 36m    | 6d 21h     | 21.6&ndash;24.2   | 5.0 GB  | 4.5 GB
+-| 256x256    | 2    | 3h 27m    | 3d 14h     | 11.2&ndash;11.8   | 5.2 GB  | 9.0 GB
+-| 256x256    | 4    | 1h 45m    | 1d 20h     | 5.6&ndash;5.9     | 5.2 GB  | 17.8 GB
+-| 256x256    | 8    | 1h 24m    | 1d 11h     | 4.4&ndash;5.5     | 3.2 GB  | 34.7 GB
+-| 512x512    | 1    | 21h 03m   | 21d 22h    | 72.5&ndash;74.9   | 7.6 GB  | 5.0 GB
+-| 512x512    | 2    | 10h 59m   | 11d 10h    | 37.7&ndash;40.0   | 7.8 GB  | 9.8 GB
+-| 512x512    | 4    | 5h 29m    | 5d 17h     | 18.7&ndash;19.1   | 7.9 GB  | 17.7 GB
+-| 512x512    | 8    | 2h 48m    | 2d 22h     | 9.5&ndash;9.7     | 7.8 GB  | 38.2 GB
+-| 1024x1024  | 1    | 1d 20h    | 46d 03h    | 154.3&ndash;161.6 | 8.1 GB  | 5.3 GB
+-| 1024x1024  | 2    | 23h 09m   | 24d 02h    | 80.6&ndash;86.2   | 8.6 GB  | 11.9 GB
+-| 1024x1024  | 4    | 11h 36m   | 12d 02h    | 40.1&ndash;40.8   | 8.4 GB  | 21.9 GB
+-| 1024x1024  | 8    | 5h 54m    | 6d 03h     | 20.2&ndash;20.6   | 8.3 GB  | 44.7 GB
+-
+-The above measurements were done using NVIDIA Tesla V100 GPUs with default settings (`--cfg=auto --aug=ada --metrics=fid50k_full`). "sec/kimg" shows the expected range of variation in raw training performance, as reported in `log.txt`. "GPU mem" and "CPU mem" show the highest observed memory consumption, excluding the peak at the beginning caused by `torch.backends.cudnn.benchmark`.
+-
+-In typical cases, 25000 kimg or more is needed to reach convergence, but the results are already quite reasonable around 5000 kimg. 1000 kimg is often enough for transfer learning, which tends to converge significantly faster. The following figure shows example convergence curves for different datasets as a function of wallclock time, using the same settings as above:
+-
+-![Training curves](./docs/stylegan2-ada-training-curves.png)
+-
+-Note: `--cfg=auto` serves as a reasonable first guess for the hyperparameters but it does not necessarily lead to optimal results for a given dataset. For example, `--cfg=stylegan2` yields considerably better FID  for FFHQ-140k at 1024x1024 than illustrated above. We recommend trying out at least a few different values of `--gamma` for each new dataset.
+-
+-## Quality metrics
+-
+-By default, `train.py` automatically computes FID for each network pickle exported during training. We recommend inspecting `metric-fid50k_full.jsonl` (or TensorBoard) at regular intervals to monitor the training progress. When desired, the automatic computation can be disabled with `--metrics=none` to speed up the training slightly (3%&ndash;9%).
+-
+-Additional quality metrics can also be computed after the training:
+-
+-```.bash
+-# Previous training run: look up options automatically, save result to JSONL file.
+-python calc_metrics.py --metrics=pr50k3_full \
+-    --network=~/training-runs/00000-ffhq10k-res64-auto1/network-snapshot-000000.pkl
+-
+-# Pre-trained network pickle: specify dataset explicitly, print result to stdout.
+-python calc_metrics.py --metrics=fid50k_full --data=~/datasets/ffhq.zip --mirror=1 \
+-    --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/ffhq.pkl
+-```
+-
+-The first example looks up the training configuration and performs the same operation as if `--metrics=pr50k3_full` had been specified during training. The second example downloads a pre-trained network pickle, in which case the values of `--mirror` and `--data` must be specified explicitly.
+-
+-Note that many of the metrics have a significant one-off cost when calculating them for the first time for a new dataset (up to 30min). Also note that the evaluation is done using a different random seed each time, so the results will vary if the same metric is computed multiple times.
+-
+-We employ the following metrics in the ADA paper. Execution time and GPU memory usage is reported for one NVIDIA Tesla V100 GPU at 1024x1024 resolution:
+-
+-| Metric        | Time   | GPU mem | Description |
+-| :-----        | :----: | :-----: | :---------- |
+-| `fid50k_full` | 13 min | 1.8 GB  | Fr&eacute;chet inception distance<sup>[1]</sup> against the full dataset
+-| `kid50k_full` | 13 min | 1.8 GB  | Kernel inception distance<sup>[2]</sup> against the full dataset
+-| `pr50k3_full` | 13 min | 4.1 GB  | Precision and recall<sup>[3]</sup> againt the full dataset
+-| `is50k`       | 13 min | 1.8 GB  | Inception score<sup>[4]</sup> for CIFAR-10
+-
+-In addition, the following metrics from the [StyleGAN](https://github.com/NVlabs/stylegan) and [StyleGAN2](https://github.com/NVlabs/stylegan2) papers are also supported:
+-
+-| Metric        | Time   | GPU mem | Description |
+-| :------------ | :----: | :-----: | :---------- |
+-| `fid50k`      | 13 min | 1.8 GB  | Fr&eacute;chet inception distance against 50k real images
+-| `kid50k`      | 13 min | 1.8 GB  | Kernel inception distance against 50k real images
+-| `pr50k3`      | 13 min | 4.1 GB  | Precision and recall against 50k real images
+-| `ppl2_wend`   | 36 min | 2.4 GB  | Perceptual path length<sup>[5]</sup> in W, endpoints, full image
+-| `ppl_zfull`   | 36 min | 2.4 GB  | Perceptual path length in Z, full paths, cropped image
+-| `ppl_wfull`   | 36 min | 2.4 GB  | Perceptual path length in W, full paths, cropped image
+-| `ppl_zend`    | 36 min | 2.4 GB  | Perceptual path length in Z, endpoints, cropped image
+-| `ppl_wend`    | 36 min | 2.4 GB  | Perceptual path length in W, endpoints, cropped image
+-
+-References:
+-1. [GANs Trained by a Two Time-Scale Update Rule Converge to a Local Nash Equilibrium](https://arxiv.org/abs/1706.08500), Heusel et al. 2017
+-2. [Demystifying MMD GANs](https://arxiv.org/abs/1801.01401), Bi&nacute;kowski et al. 2018
+-3. [Improved Precision and Recall Metric for Assessing Generative Models](https://arxiv.org/abs/1904.06991), Kynk&auml;&auml;nniemi et al. 2019
+-4. [Improved Techniques for Training GANs](https://arxiv.org/abs/1606.03498), Salimans et al. 2016
+-5. [A Style-Based Generator Architecture for Generative Adversarial Networks](https://arxiv.org/abs/1812.04948), Karras et al. 2018
+-
+-## License
+-
+-Copyright &copy; 2021, NVIDIA Corporation. All rights reserved.
+-
+-This work is made available under the [Nvidia Source Code License](https://nvlabs.github.io/stylegan2-ada-pytorch/license.html).
+-
+-## Citation
+-
+-```
+-@inproceedings{Karras2020ada,
+-  title     = {Training Generative Adversarial Networks with Limited Data},
+-  author    = {Tero Karras and Miika Aittala and Janne Hellsten and Samuli Laine and Jaakko Lehtinen and Timo Aila},
+-  booktitle = {Proc. NeurIPS},
+-  year      = {2020}
+-}
+-```
++<img src="../imgs/obama.gif" width="1000px"/>
+ 
+-## Development
++## Other Usages
+ 
+-This is a research reference implementation and is treated as a one-time code drop. As such, we do not accept outside code contributions in the form of pull requests.
++To train on larger datasets (e.g., CIFAR and FFHQ), please follow the guidelines in the [stylegan2-ada-pytorch](https://github.com/NVlabs/stylegan2-ada-pytorch) README to prepare the datasets.
+ 
+-## Acknowledgements
++## Disclaimer
+ 
+-We thank David Luebke for helpful comments; Tero Kuosmanen and Sabu Nadarajan for their support with compute infrastructure; and Edgar Sch&ouml;nfeld for guidance on setting up unconditional BigGAN.
++This PyTorch codebase will not fully reproduce our paper's results, as it uses a different set of hyperparameters and a different evaluation protocal. Please refer to our [TensorFlow repo](https://github.com/mit-han-lab/data-efficient-gans/tree/master/DiffAugment-stylegan2) to fully reproduce the paper's results.
+diff --git a/dnnlib/util.py b/dnnlib/util.py
+index 7672533..6c55da3 100755
+--- a/dnnlib/util.py
++++ b/dnnlib/util.py
+@@ -416,7 +416,8 @@ def open_url(url: str, cache_dir: str = None, num_attempts: int = 10, verbose: b
+ 
+     url_md5 = hashlib.md5(url.encode("utf-8")).hexdigest()
+     if cache:
+-        cache_files = glob.glob(os.path.join(cache_dir, url_md5 + "_*"))
++        cache_dir = os.path.join(cache_dir, url_md5)
++        cache_files = glob.glob(os.path.join(cache_dir, "*"))
+         if len(cache_files) == 1:
+             filename = cache_files[0]
+             return filename if return_filename else open(filename, "rb")
+@@ -462,9 +463,9 @@ def open_url(url: str, cache_dir: str = None, num_attempts: int = 10, verbose: b
+ 
+     # Save to cache.
+     if cache:
+-        safe_name = re.sub(r"[^0-9a-zA-Z-._]", "_", url_name)
+-        cache_file = os.path.join(cache_dir, url_md5 + "_" + safe_name)
+-        temp_file = os.path.join(cache_dir, "tmp_" + uuid.uuid4().hex + "_" + url_md5 + "_" + safe_name)
++        filename = os.path.basename(url_name)
++        cache_file = os.path.join(cache_dir, filename)
++        temp_file = os.path.join(cache_dir, "tmp_" + uuid.uuid4().hex + "_" + filename)
+         os.makedirs(cache_dir, exist_ok=True)
+         with open(temp_file, "wb") as f:
+             f.write(url_data)
+diff --git a/generate_gif.py b/generate_gif.py
+new file mode 100644
+index 0000000..cea3c87
+--- /dev/null
++++ b/generate_gif.py
+@@ -0,0 +1,93 @@
++"""Generate GIF using pretrained network pickle."""
++
++import os
++
++import click
++import dnnlib
++import numpy as np
++from PIL import Image
++import torch
++
++import legacy
++
++#----------------------------------------------------------------------------
++
++@click.command()
++@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
++@click.option('--seed', help='Random seed', default=0, type=int)
++@click.option('--num-rows', help='Number of rows', default=1, type=int)
++@click.option('--num-cols', help='Number of columns', default=8, type=int)
++@click.option('--resolution', help='Resolution of the output images', default=128, type=int)
++@click.option('--num-phases', help='Number of phases', default=5, type=int)
++@click.option('--transition-frames', help='Number of transition frames per phase', default=20, type=int)
++@click.option('--static-frames', help='Number of static frames per phase', default=5, type=int)
++@click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
++@click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
++@click.option('--output', type=str, required=True)
++def generate_gif(
++    network_pkl: str,
++    seed: int,
++    num_rows: int,
++    num_cols: int,
++    resolution: int,
++    num_phases: int,
++    transition_frames: int,
++    static_frames: int,
++    truncation_psi: float,
++    noise_mode: str,
++    output: str
++):
++    """Generate gif using pretrained network pickle.
++
++    Examples:
++
++    \b
++    python generate_gif.py --output=obama.gif --seed=0 --num-rows=1 --num-cols=8 \\
++        --network=https://hanlab.mit.edu/projects/data-efficient-gans/models/DiffAugment-stylegan2-100-shot-obama.pkl
++    """
++    print('Loading networks from "%s"...' % network_pkl)
++    device = torch.device('cuda')
++    with dnnlib.util.open_url(network_pkl) as f:
++        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
++
++    outdir = os.path.dirname(output)
++    if outdir:
++        os.makedirs(outdir, exist_ok=True)
++
++    np.random.seed(seed)
++
++    output_seq = []
++    batch_size = num_rows * num_cols
++    latent_size = G.z_dim
++    latents = [np.random.randn(batch_size, latent_size) for _ in range(num_phases)]
++
++    def to_image_grid(outputs):
++        outputs = np.reshape(outputs, [num_rows, num_cols, *outputs.shape[1:]])
++        outputs = np.concatenate(outputs, axis=1)
++        outputs = np.concatenate(outputs, axis=1)
++        return Image.fromarray(outputs).resize((resolution * num_cols, resolution * num_rows), Image.ANTIALIAS)
++    
++    def generate(dlatents):
++        images = G.synthesis(dlatents, noise_mode=noise_mode)
++        images = (images.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8).cpu().numpy()
++        return to_image_grid(images)
++    
++    for i in range(num_phases):
++        dlatents0 = G.mapping(torch.from_numpy(latents[i - 1]).to(device), None)
++        dlatents1 = G.mapping(torch.from_numpy(latents[i]).to(device), None)
++        for j in range(transition_frames):
++            dlatents = (dlatents0 * (transition_frames - j) + dlatents1 * j) / transition_frames
++            output_seq.append(generate(dlatents))
++        output_seq.extend([generate(dlatents1)] * static_frames)
++    
++    if not output.endswith('.gif'):
++        output += '.gif'
++    output_seq[0].save(output, save_all=True, append_images=output_seq[1:], optimize=False, duration=50, loop=0)
++
++
++#----------------------------------------------------------------------------
++
++if __name__ == "__main__":
++    generate_gif() # pylint: disable=no-value-for-parameter
++
++#----------------------------------------------------------------------------
+diff --git a/legacy.py b/legacy.py
+index 9387d79..6859e64 100755
+--- a/legacy.py
++++ b/legacy.py
+@@ -134,7 +134,7 @@ def convert_tf_generator(tf_G):
+             w_avg_beta          = kwarg('w_avg_beta',           0.995,  none=1),
+         ),
+         synthesis_kwargs = dnnlib.EasyDict(
+-            channel_base        = kwarg('fmap_base',            16384) * 2,
++            channel_base        = kwarg('fmap_base',            None),
+             channel_max         = kwarg('fmap_max',             512),
+             num_fp16_res        = kwarg('num_fp16_res',         0),
+             conv_clamp          = kwarg('conv_clamp',           None),
+@@ -150,6 +150,7 @@ def convert_tf_generator(tf_G):
+     kwarg('truncation_cutoff')
+     kwarg('style_mixing_prob')
+     kwarg('structure')
++    kwarg('impl')
+     unknown_kwargs = list(set(tf_kwargs.keys()) - known_kwargs)
+     if len(unknown_kwargs) > 0:
+         raise ValueError('Unknown TensorFlow kwarg', unknown_kwargs[0])
+@@ -164,6 +165,15 @@ def convert_tf_generator(tf_G):
+             kwargs.synthesis.kwargs.architecture = 'orig'
+     #for name, value in tf_params.items(): print(f'{name:<50s}{list(value.shape)}')
+ 
++    if kwargs.synthesis_kwargs.channel_base is None:
++        top_level_weight = tf_params.get(f'synthesis/{kwargs.img_resolution}x{kwargs.img_resolution}/Conv1/weight', None)
++        if top_level_weight is not None:
++            kwargs.synthesis_kwargs.channel_base = top_level_weight.shape[-1] * kwargs.img_resolution
++        else:
++            kwargs.synthesis_kwargs.channel_base = 32768
++    else:
++        kwargs.synthesis_kwargs.channel_base *= 2
++
+     # Convert params.
+     from training import networks
+     G = networks.Generator(**kwargs).eval().requires_grad_(False)
+@@ -221,7 +231,7 @@ def convert_tf_discriminator(tf_D):
+         img_resolution          = kwarg('resolution',           1024),
+         img_channels            = kwarg('num_channels',         3),
+         architecture            = kwarg('architecture',         'resnet'),
+-        channel_base            = kwarg('fmap_base',            16384) * 2,
++        channel_base            = kwarg('fmap_base',            None),
+         channel_max             = kwarg('fmap_max',             512),
+         num_fp16_res            = kwarg('num_fp16_res',         0),
+         conv_clamp              = kwarg('conv_clamp',           None),
+@@ -247,6 +257,7 @@ def convert_tf_discriminator(tf_D):
+ 
+     # Check for unknown kwargs.
+     kwarg('structure')
++    kwarg('impl')
+     unknown_kwargs = list(set(tf_kwargs.keys()) - known_kwargs)
+     if len(unknown_kwargs) > 0:
+         raise ValueError('Unknown TensorFlow kwarg', unknown_kwargs[0])
+@@ -261,6 +272,15 @@ def convert_tf_discriminator(tf_D):
+             kwargs.architecture = 'orig'
+     #for name, value in tf_params.items(): print(f'{name:<50s}{list(value.shape)}')
+ 
++    if kwargs.channel_base is None:
++        top_level_weight = tf_params.get(f'{kwargs.img_resolution}x{kwargs.img_resolution}/Conv0/weight', None)
++        if top_level_weight is not None:
++            kwargs.channel_base = top_level_weight.shape[-1] * kwargs.img_resolution
++        else:
++            kwargs.channel_base = 32768
++    else:
++        kwargs.channel_base *= 2
++
+     # Convert params.
+     from training import networks
+     D = networks.Discriminator(**kwargs).eval().requires_grad_(False)
+diff --git a/train.py b/train.py
+index 8d81b3f..b32f565 100755
+--- a/train.py
++++ b/train.py
+@@ -49,6 +49,7 @@ def setup_training_loop_kwargs(
+     batch      = None, # Override batch size: <int>
+ 
+     # Discriminator augmentation.
++    diffaugment= None, # Comma-separated list of DiffAugment policy, default = 'color,translation,cutout'
+     aug        = None, # Augmentation mode: 'ada' (default), 'noaug', 'fixed'
+     p          = None, # Specify p for 'fixed' (required): <float>
+     target     = None, # Override ADA target for 'ada': <float>, default = depends on aug
+@@ -147,11 +148,12 @@ def setup_training_loop_kwargs(
+     # ------------------------------------
+ 
+     if cfg is None:
+-        cfg = 'auto'
++        cfg = 'low_shot'
+     assert isinstance(cfg, str)
+     desc += f'-{cfg}'
+ 
+     cfg_specs = {
++        'low_shot':  dict(ref_gpus=-1, kimg=300,    mb=8,  mbstd=4,  fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=2, snap=10),
+         'auto':      dict(ref_gpus=-1, kimg=25000,  mb=-1, mbstd=-1, fmaps=-1,  lrate=-1,     gamma=-1,   ema=-1,  ramp=0.05, map=2), # Populated dynamically based on resolution and GPU count.
+         'stylegan2': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,  gamma=10,   ema=10,  ramp=None, map=8), # Uses mixed-precision, unlike the original StyleGAN2.
+         'paper256':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=0.5, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8),
+@@ -173,6 +175,12 @@ def setup_training_loop_kwargs(
+         spec.gamma = 0.0002 * (res ** 2) / spec.mb # heuristic formula
+         spec.ema = spec.mb * 10 / 32
+ 
++    if spec.ref_gpus < 0:
++        spec.ref_gpus = gpus
++    
++    if spec.get('snap', None):
++        args.image_snapshot_ticks = args.network_snapshot_ticks = spec.snap
++
+     args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
+     args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
+     args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
+@@ -223,7 +231,14 @@ def setup_training_loop_kwargs(
+     # Discriminator augmentation: aug, p, target, augpipe
+     # ---------------------------------------------------
+ 
+-    if aug is None:
++    if diffaugment is None:
++        diffaugment = 'color,translation,cutout'
++
++    if diffaugment:
++        args.loss_kwargs.diffaugment = diffaugment
++        aug = 'noaug'
++        desc += '-{}'.format(diffaugment.replace(',', '-'))
++    elif aug is None:
+         aug = 'ada'
+     else:
+         assert isinstance(aug, str)
+@@ -413,12 +428,13 @@ class CommaSeparatedList(click.ParamType):
+ @click.option('--mirror', help='Enable dataset x-flips [default: false]', type=bool, metavar='BOOL')
+ 
+ # Base config.
+-@click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar']))
++@click.option('--cfg', help='Base config [default: low_shot]', type=click.Choice(['low_shot', 'auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar']))
+ @click.option('--gamma', help='Override R1 gamma', type=float)
+ @click.option('--kimg', help='Override training duration', type=int, metavar='INT')
+ @click.option('--batch', help='Override batch size', type=int, metavar='INT')
+ 
+ # Discriminator augmentation.
++@click.option('--DiffAugment', help='Comma-separated list of DiffAugment policy [default: color,translation,cutout]', type=str)
+ @click.option('--aug', help='Augmentation mode [default: ada]', type=click.Choice(['noaug', 'ada', 'fixed']))
+ @click.option('--p', help='Augmentation probability for --aug=fixed', type=float)
+ @click.option('--target', help='ADA target value for --aug=ada', type=float)
+diff --git a/training/dataset.py b/training/dataset.py
+index 82dcaba..5ba6114 100755
+--- a/training/dataset.py
++++ b/training/dataset.py
+@@ -157,7 +157,7 @@ class ImageFolderDataset(Dataset):
+         resolution      = None, # Ensure specific resolution, None = highest available.
+         **super_kwargs,         # Additional arguments for the Dataset base class.
+     ):
+-        self._path = path
++        self._path = dnnlib.util.open_url(path, return_filename=True)
+         self._zipfile = None
+ 
+         if os.path.isdir(self._path):
+diff --git a/training/loss.py b/training/loss.py
+index b87de44..1ff3483 100755
+--- a/training/loss.py
++++ b/training/loss.py
+@@ -12,6 +12,8 @@ from torch_utils import training_stats
+ from torch_utils import misc
+ from torch_utils.ops import conv2d_gradfix
+ 
++from DiffAugment_pytorch import DiffAugment
++
+ #----------------------------------------------------------------------------
+ 
+ class Loss:
+@@ -21,12 +23,13 @@ class Loss:
+ #----------------------------------------------------------------------------
+ 
+ class StyleGAN2Loss(Loss):
+-    def __init__(self, device, G_mapping, G_synthesis, D, augment_pipe=None, style_mixing_prob=0.9, r1_gamma=10, pl_batch_shrink=2, pl_decay=0.01, pl_weight=2):
++    def __init__(self, device, G_mapping, G_synthesis, D, diffaugment='', augment_pipe=None, style_mixing_prob=0.9, r1_gamma=10, pl_batch_shrink=2, pl_decay=0.01, pl_weight=2):
+         super().__init__()
+         self.device = device
+         self.G_mapping = G_mapping
+         self.G_synthesis = G_synthesis
+         self.D = D
++        self.diffaugment = diffaugment
+         self.augment_pipe = augment_pipe
+         self.style_mixing_prob = style_mixing_prob
+         self.r1_gamma = r1_gamma
+@@ -48,6 +51,8 @@ class StyleGAN2Loss(Loss):
+         return img, ws
+ 
+     def run_D(self, img, c, sync):
++        if self.diffaugment:
++            img = DiffAugment(img, policy=self.diffaugment)
+         if self.augment_pipe is not None:
+             img = self.augment_pipe(img)
+         with misc.ddp_sync(self.D, sync):
