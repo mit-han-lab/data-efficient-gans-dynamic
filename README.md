@@ -13,7 +13,7 @@ Differentiable Augmentation for Data-Efficient GAN Training<br>
 MIT, Tsinghua University, Adobe Research, CMU<br>
 [arXiv](https://arxiv.org/pdf/2006.10738.pdf)
 
-## Preparation
+## Usage
 
 First, clone NVIDIA's stylegan2 repos and apply our patch files:
 
